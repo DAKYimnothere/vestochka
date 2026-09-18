@@ -1,0 +1,10 @@
+.env
+*.db
+.idea/
+__pycache__/
+*.py[cod]
+.venv/
+web/uploads/*
+!web/uploads/.gitkeep
+client/local_keys/*
+!.gitkeep

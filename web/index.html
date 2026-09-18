@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vestochka — живые разговоры</title>
+  <link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section id="auth-view" class="auth-card">
+      <div class="brand-mark">✦</div>
+      <p class="eyebrow">VESTOCHKA</p>
+      <h1>Общайся ярче.</h1>
+      <p class="muted">Мессенджер с музыкой, AI и живыми видеосообщениями.</p>
+      <form id="auth-form">
+        <input id="username" placeholder="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" required>
+        <input id="password" type="password" placeholder="Пароль" minlength="4" required>
+        <div class="auth-actions">
+          <button type="submit" class="primary">Войти</button>
+          <button type="button" id="register-btn" class="ghost">Создать аккаунт</button>
+        </div>
+      </form>
+      <p id="auth-status" class="status"></p>
+    </section>
+
+    <section id="messenger-view" class="messenger hidden">
+      <aside class="sidebar">
+        <div class="sidebar-top">
+          <div class="brand-line"><span class="brand-mark small">✦</span><strong>vestochka</strong></div>
+          <button id="logout-btn" class="icon-btn" title="Выйти">↗</button>
+        </div>
+        <div class="profile-chip">
+          <div id="my-avatar" class="avatar">V</div>
+          <div><strong id="my-name"></strong><small id="my-id"></small></div>
+          <span class="online-dot"></span>
+        </div>
+        <input id="search-input" class="search" placeholder="Найти собеседника...">
+        <div id="search-results" class="search-results"></div>
+        <div class="nav-tabs">
+          <button class="nav-tab active" data-tab="chat">💬 Чаты</button>
+          <button class="nav-tab" data-tab="profile">◯ Профиль</button>
+          <button class="nav-tab" data-tab="settings">⚙ Настройки</button>
+        </div>
+        <p class="section-label">Недавние чаты</p>
+        <div id="chat-list" class="chat-list"></div>
+      </aside>
+      <section id="chat-tab" class="conversation tab-content">
+        <header class="conversation-header">
+          <div id="chat-avatar" class="avatar pastel">?</div>
+          <div><strong id="chat-name">Выберите контакт</strong><small id="chat-status">Ваши разговоры будут здесь</small></div>
+          <div class="header-actions">
+            <button class="icon-btn call-btn" data-kind="voice" title="Аудиозвонок">☎</button>
+            <button class="icon-btn call-btn" data-kind="video" title="Видеозвонок">▣</button>
+          </div>
+        </header>
+        <div id="messages" class="messages">
+          <div class="empty-state"><span>✦</span><h2>Тёплые разговоры</h2><p>Найди пользователя по username и начни общение.</p></div>
+        </div>
+        <div id="action-toast" class="action-toast" role="status"></div>
+        <div class="composer">
+          <button id="ai-btn" class="tool-btn" title="Спросить AI">AI</button>
+          <button id="media-btn" class="tool-btn" title="Музыка и эффекты">♫</button>
+          <input id="message-input" placeholder="Напишите сообщение..." disabled>
+          <button id="send-btn" class="send-btn" disabled>➤</button>
+        </div>
+      </section>
+      <section id="profile-tab" class="panel-page tab-content hidden">
+        <div class="panel-heading"><div><p class="eyebrow">МОЙ ПРОФИЛЬ</p><h2>Твоя визитка</h2><p class="muted">Расскажи о себе и поделись моментом.</p></div><button class="icon-btn" data-tab="chat">×</button></div>
+        <div class="profile-editor">
+          <div class="profile-hero"><div id="profile-avatar" class="avatar profile-avatar">V</div><label class="upload-btn">Загрузить аватар<input id="avatar-file" type="file" accept="image/png,image/jpeg,image/webp" hidden></label></div>
+          <label>Отображаемое имя<input id="profile-name" class="form-input" maxlength="100"></label>
+          <label>О себе<textarea id="profile-bio" class="form-input" maxlength="255" rows="3"></textarea></label>
+          <label>Номер телефона<input id="profile-phone" class="form-input" placeholder="+7 ..."></label>
+          <button id="save-profile" class="primary save-btn">Сохранить профиль</button>
+          <div class="stories-head"><div><p class="eyebrow">CIRCLE STORIES</p><h3>Мои stories · 24 часа</h3></div><button id="publish-story" class="primary story-publish-btn">＋ Опубликовать story</button><input id="story-file" type="file" accept="image/*,video/mp4,video/webm" hidden></div>
+          <input id="story-caption" class="form-input" placeholder="Подпись к story">
+          <input id="story-music" class="form-input" placeholder="Музыка или настроение (например: Lo-fi sunset)">
+          <div id="stories-list" class="stories-list"></div>
+        </div>
+      </section>
+      <section id="settings-tab" class="panel-page tab-content hidden">
+        <div class="panel-heading"><div><p class="eyebrow">ПЕРСОНАЛИЗАЦИЯ</p><h2>Настройки</h2><p class="muted">Приватность и комфорт — под твоим контролем.</p></div><button class="icon-btn" data-tab="chat">×</button></div>
+        <div class="settings-list">
+          <label class="setting-row"><span><strong>Тема интерфейса</strong><small>Светлая или тёмная палитра</small></span><select id="theme-setting"><option value="light">Светлая</option><option value="dark">Тёмная</option></select></label>
+          <label class="setting-row"><span><strong>Кому виден номер</strong><small>Контроль личных данных</small></span><select id="phone-visibility"><option value="nobody">Никому</option><option value="contacts">Контактам</option><option value="everybody">Всем</option></select></label>
+          <label class="setting-row"><span><strong>Кто видит «в сети»</strong><small>Статус активности</small></span><select id="last-seen-visibility"><option value="everybody">Все</option><option value="contacts">Контакты</option><option value="nobody">Никто</option></select></label>
+          <label class="setting-row"><span><strong>Дополнительный пароль</strong><small>Заготовка для 2FA-защиты аккаунта</small></span><input id="two-factor" type="checkbox"></label>
+        </div>
+        <button id="save-settings" class="primary save-btn">Сохранить настройки</button>
+        <div class="sessions-card"><h3>Активные сессии</h3><p class="muted">Сессии старше 24 часов автоматически завершаются.</p><div id="sessions-list"></div></div>
+      </section>
+      <aside class="feature-panel">
+        <div class="feature-card gradient-card"><span class="feature-icon">✦</span><p class="eyebrow">VESTO AI</p><h3>Умный собеседник внутри чата</h3><p>Идеи, ответы и настроение — прямо в разговоре.</p><button id="ai-card-btn" class="text-btn">Попробовать →</button></div>
+        <div class="feature-card"><span class="feature-icon">◉</span><p class="eyebrow">CIRCLE FX</p><h3>Кружочки с саундтреком</h3><p>Добавляй музыку и мягкие эффекты к видеосообщениям.</p><button id="media-card-btn" class="text-btn">Открыть студию →</button></div>
+        <div id="feature-note" class="feature-note">Выбери контакт, чтобы начать.</div>
+      </aside>
+    </section>
+  </main>
+  <div id="call-overlay" class="call-overlay hidden">
+    <div class="call-card">
+      <div class="call-card-head"><strong id="call-title">Звонок</strong><button id="end-call" class="icon-btn">×</button></div>
+      <div class="video-stage"><video id="remote-video" autoplay playsinline></video><video id="local-video" autoplay muted playsinline></video></div>
+      <p id="call-status" class="muted">Подключение...</p>
+    </div>
+  </div>
+  <div id="avatar-editor" class="call-overlay hidden">
+    <div class="editor-card">
+      <div class="call-card-head"><strong>Настроить аватар</strong><button id="close-avatar-editor" class="icon-btn">×</button></div>
+      <canvas id="avatar-canvas" width="320" height="320"></canvas>
+      <label class="zoom-control">Масштаб <input id="avatar-zoom" type="range" min="1" max="3" step="0.05" value="1"></label>
+      <div class="editor-actions"><button id="rotate-avatar" class="ghost">↻ Повернуть</button><button id="save-avatar" class="primary">Сохранить аватар</button></div>
+    </div>
+  </div>
+  <div id="public-profile-modal" class="call-overlay hidden">
+    <div class="public-profile-card">
+      <button id="close-public-profile" class="icon-btn profile-close">×</button>
+      <div id="public-avatar" class="public-avatar"></div>
+      <p id="public-username" class="eyebrow"></p>
+      <h2 id="public-name"></h2>
+      <p id="public-id" class="muted"></p>
+      <p id="public-bio" class="public-bio"></p>
+      <p id="public-phone" class="muted"></p>
+      <div class="public-actions"><button id="public-message" class="primary">Написать сообщение</button></div>
+      <div><p class="eyebrow">CIRCLE STORIES</p><div id="public-stories" class="stories-list"></div></div>
+    </div>
+  </div>
+  <script src="/web/app.js"></script>
+</body>
+</html>
