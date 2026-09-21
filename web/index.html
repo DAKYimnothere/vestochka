@@ -45,10 +45,33 @@
       .story-actions button { min-height: 44px; }
       .call-card, .editor-card, .public-profile-card, .story-viewer-card { max-height: calc(100dvh - 24px); overflow: auto; padding: 16px; border-radius: 14px; }
       .video-stage, .video-stage video { min-height: 250px; }
+      .mobile-back-btn { display: grid; }
+      .messenger.mobile-chat-open .sidebar { display: none; }
+      .messenger.mobile-chat-open .conversation { height: 100%; }
+      .recording-card { width: min(100%, 360px); padding: 24px 18px; border-radius: 20px; background: var(--surface-raised); color: var(--ink); text-align: center; }
+      .recording-card h2 { margin: 0 0 16px; font-size: 24px; }
+      .recording-preview-frame { position: relative; width: min(72vw, 270px); aspect-ratio: 1; margin: 0 auto 14px; border-radius: 50%; overflow: hidden; background: var(--surface-deep); box-shadow: 0 0 0 8px var(--accent-soft), 0 15px 40px #0002; }
+      .recording-preview-frame video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+      .recording-preview-ring { position: absolute; inset: -7px; border: 3px solid var(--danger); border-radius: 50%; animation: recording-ring 1.2s ease-out infinite; pointer-events: none; }
+      .recording-actions { display: flex; gap: 8px; }
+      .recording-actions button { flex: 1; min-height: 46px; }
+    }
+    .mobile-back-btn { display: none; }
+    .video-circle { width: 190px; height: 190px; max-width: min(62vw, 190px); aspect-ratio: 1; object-fit: cover; border-radius: 50%; border: 4px solid var(--accent); background: var(--surface-deep); box-shadow: 0 5px 18px #0002; }
+    .recording-card { width: min(430px, 100%); padding: 28px; border-radius: 18px; background: var(--surface-raised); color: var(--ink); text-align: center; }
+    .recording-card h2 { margin: 0 0 18px; }
+    .recording-preview-frame { position: relative; width: 280px; aspect-ratio: 1; margin: 0 auto 16px; border-radius: 50%; overflow: hidden; background: var(--surface-deep); }
+    .recording-preview-frame video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+    .recording-preview-ring { position: absolute; inset: -7px; border: 3px solid var(--danger); border-radius: 50%; animation: recording-ring 1.2s ease-out infinite; pointer-events: none; }
+    .recording-actions { display: flex; gap: 10px; }
+    .recording-actions button { flex: 1; min-height: 46px; }
     }
     @media (max-width: 380px) {
       .composer .tool-btn:first-child, .conversation-header #chat-heading small { display: none; }
       .message { max-width: 92%; }
+    }
+    @media (max-width: 700px) {
+      .mobile-back-btn { display: grid; }
     }
   </style>
 </head>
@@ -93,6 +116,7 @@
       </aside>
       <section id="chat-tab" class="conversation tab-content">
         <header class="conversation-header">
+          <button id="mobile-back-btn" class="icon-btn mobile-back-btn" title="Назад к чатам" aria-label="Назад к чатам">←</button>
           <div id="chat-avatar" class="avatar pastel" title="Открыть профиль">?</div>
           <div id="chat-heading" title="Открыть профиль"><strong id="chat-name">Выберите контакт</strong><small id="chat-status">Ваши разговоры будут здесь</small></div>
           <div class="header-actions">
@@ -163,6 +187,15 @@
       <div class="call-card-head"><strong id="call-title">Звонок</strong><button id="end-call" class="icon-btn">×</button></div>
       <div class="video-stage"><video id="remote-video" autoplay playsinline></video><video id="local-video" autoplay muted playsinline></video><div id="call-placeholder">Ожидание подключения…</div></div>
       <p id="call-status" class="muted">Подключение...</p>
+    </div>
+  </div>
+  <div id="recording-overlay" class="call-overlay hidden">
+    <div class="recording-card">
+      <p class="eyebrow">СООБЩЕНИЕ</p>
+      <h2 id="recording-title">Запись кружочка</h2>
+      <div class="recording-preview-frame"><video id="recording-preview" autoplay muted playsinline></video><div class="recording-preview-ring"></div></div>
+      <p id="recording-overlay-status" class="muted">00:00</p>
+      <div class="recording-actions"><button id="cancel-recording" class="ghost">Отмена</button><button id="stop-recording" class="primary">Готово</button></div>
     </div>
   </div>
   <div id="avatar-editor" class="call-overlay hidden">

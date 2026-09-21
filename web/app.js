@@ -413,7 +413,7 @@ async function renderMessages(messages) {
     const replyMessage = message.reply_to_id ? messages.find(item => item.id === message.reply_to_id) : null;
     const replyIndex = replyMessage ? messages.indexOf(replyMessage) : -1;
     const reply = replyMessage ? `<small class="reply-reference">${escapeHtml((decrypted[replyIndex] || (message.media_type === 'audio' ? 'Голосовое сообщение' : message.media_type === 'video' ? 'Кружочек' : 'Сообщение')).slice(0, 120))}</small>` : "";
-    const mediaMarkup = message.media_url ? (message.media_type === 'audio' ? `<div class="audio-player"><audio class="audio-source" preload="metadata" src="${message.media_url}"></audio><button class="audio-play" type="button" aria-label="Воспроизвести голосовое сообщение"><span>▶</span></button><div class="audio-details"><input class="audio-progress" type="range" min="0" max="100" value="0" step="0.1" aria-label="Позиция голосового сообщения"><div class="audio-meta"><span class="audio-label">Голосовое</span><span class="audio-time">0:00</span></div></div></div>` : `<video controls class="media-message" src="${message.media_url}"></video>`) : "";
+    const mediaMarkup = message.media_url ? (message.media_type === 'audio' ? `<div class="audio-player"><audio class="audio-source" preload="metadata" src="${message.media_url}"></audio><button class="audio-play" type="button" aria-label="Воспроизвести голосовое сообщение"><span>▶</span></button><div class="audio-details"><input class="audio-progress" type="range" min="0" max="100" value="0" step="0.1" aria-label="Позиция голосового сообщения"><div class="audio-meta"><span class="audio-label">Голосовое</span><span class="audio-time">0:00</span></div></div></div>` : `<video controls playsinline class="media-message video-circle" src="${message.media_url}"></video>`) : "";
     const textMarkup = message.media_url ? "" : `<div class="message-text">${escapeHtml(decrypted[index])}</div>`;
     return `<div class="message ${mine ? "mine" : ""}" data-message-id="${message.id || ""}">${reply}${mediaMarkup || textMarkup}<div class="message-tools"><button class="message-action reply-action" title="Ответить">↩</button><button class="message-action reaction-action" title="Реакция">😊</button>${reactions}</div><time>${new Date(message.timestamp).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})} ${ticks}</time></div>`;
   }).join("") : `<div class="empty-state"><span>✦</span><h2>Первое сообщение</h2><p>Добавь немного тепла в этот чат.</p></div>`;
@@ -459,6 +459,7 @@ async function reactToMessage(messageId, emoji) { try { const result = await api
 function escapeHtml(value) { return value.replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[char])); }
 async function openChat(username) {
   state.active = username; $("chat-name").textContent = `@${username}`; $("chat-status").textContent = "В сети · защищённый разговор";
+  $("messenger-view").classList.add("mobile-chat-open");
   $("chat-avatar").textContent = initials(username); $("message-input").disabled = false; $("send-btn").disabled = false;
   document.querySelector(".conversation").classList.add("chat-ready");
   updateChatStatus(username);
@@ -467,6 +468,7 @@ async function openChat(username) {
   try { const messages = await api(`/history/${state.user.username}/${username}`); state.chats.set(username, messages); renderMessages(messages); markChatRead(username); } catch (error) { $("feature-note").textContent = error.message; }
   $("feature-note").textContent = "Можно начать с сообщения, AI-подсказки или звонка.";
 }
+function closeMobileChat() { $("messenger-view").classList.remove("mobile-chat-open"); }
 async function markChatRead(username) {
   try { await api(`/chats/${username}/read`, {method:"POST"}); loadRecentChats(); }
   catch (error) { showFeature("Не удалось обновить статус прочтения: " + error.message); }
@@ -494,25 +496,36 @@ async function sendMediaMessage(mediaType) {
     state.mediaRecorder = recorder;
     state.mediaChunks = [];
     state.mediaMode = mediaType;
+    if (mediaType === "video") {
+      const preview = $("recording-preview");
+      preview.srcObject = stream;
+      $("recording-title").textContent = "Запись кружочка";
+      $("recording-overlay").classList.remove("hidden");
+    }
     recorder.ondataavailable = (event) => { if (event.data.size) state.mediaChunks.push(event.data); };
     recorder.onstop = async () => {
       const blob = new Blob(state.mediaChunks, {type: recorder.mimeType || mimeType || (mediaType === "video" ? "video/webm" : "audio/webm")});
-      const form = new FormData();
-      form.append('file', blob, mediaType === 'video' ? 'circle.webm' : 'voice.webm');
-      form.append('to_user', state.active);
-      form.append('media_type', mediaType);
-      if (state.replyTo?.id) form.append('reply_to_id', String(state.replyTo.id));
-      try {
-        const result = await api(`/messages/${state.user.username}/media?to_user=${encodeURIComponent(state.active)}&media_type=${mediaType}${state.replyTo?.id ? `&reply_to_id=${state.replyTo.id}` : ''}`, {method: 'POST', body: form});
-        const messages = state.chats.get(state.active) || [];
-        messages.push({id: result.id, sender: state.user.username, encrypted_text: '', timestamp: result.timestamp, reply_to_id: result.reply_to_id, reactions: {}, media_url: result.media_url, media_type: result.media_type});
-        state.chats.set(state.active, messages);
-        renderMessages(messages);
-        loadRecentChats();
-        showFeature(mediaType === 'video' ? 'Кружочек отправлен.' : 'Голосовое сообщение отправлено.');
-      } catch (error) { showFeature(error.message); }
+      if (!state.discardMedia) {
+        const form = new FormData();
+        form.append('file', blob, mediaType === 'video' ? 'circle.webm' : 'voice.webm');
+        form.append('to_user', state.active);
+        form.append('media_type', mediaType);
+        if (state.replyTo?.id) form.append('reply_to_id', String(state.replyTo.id));
+        try {
+          const result = await api(`/messages/${state.user.username}/media?to_user=${encodeURIComponent(state.active)}&media_type=${mediaType}${state.replyTo?.id ? `&reply_to_id=${state.replyTo.id}` : ''}`, {method: 'POST', body: form});
+          const messages = state.chats.get(state.active) || [];
+          messages.push({id: result.id, sender: state.user.username, encrypted_text: '', timestamp: result.timestamp, reply_to_id: result.reply_to_id, reactions: {}, media_url: result.media_url, media_type: result.media_type});
+          state.chats.set(state.active, messages);
+          renderMessages(messages);
+          loadRecentChats();
+          showFeature(mediaType === 'video' ? 'Кружочек отправлен.' : 'Голосовое сообщение отправлено.');
+        } catch (error) { showFeature(error.message); }
+      }
       stream.getTracks().forEach(track => track.stop());
+      $("recording-preview").srcObject = null;
+      $("recording-overlay").classList.add("hidden");
       state.isRecording = false;
+      state.discardMedia = false;
       $(mediaType === 'video' ? 'video-record-btn' : 'voice-record-btn').classList.remove('recording');
       $("recording-status").textContent = "";
       clearInterval(state.mediaTimer);
@@ -525,10 +538,13 @@ async function sendMediaMessage(mediaType) {
     button.classList.add('recording');
     const startedAt = Date.now();
     $("recording-status").textContent = "00:00";
+    $("recording-overlay-status").textContent = "00:00";
     clearInterval(state.mediaTimer);
     state.mediaTimer = setInterval(() => {
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      $("recording-status").textContent = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
+      const elapsedText = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
+      $("recording-status").textContent = elapsedText;
+      $("recording-overlay-status").textContent = elapsedText;
     }, 250);
     state.mediaTimeout = setTimeout(() => {
       if (state.mediaRecorder && state.isRecording) {
@@ -546,8 +562,9 @@ async function sendMediaMessage(mediaType) {
   }
 }
 
-function stopMediaRecording() {
+function stopMediaRecording(discard = false) {
   if (state.mediaRecorder && state.isRecording) {
+    state.discardMedia = discard;
     state.mediaRecorder.stop();
     state.isRecording = false;
     clearTimeout(state.mediaTimeout);
@@ -585,6 +602,9 @@ $("video-record-btn").onclick = () => {
   }
   sendMediaMessage("video");
 };
+$("mobile-back-btn").onclick = closeMobileChat;
+$("stop-recording").onclick = () => stopMediaRecording(false);
+$("cancel-recording").onclick = () => stopMediaRecording(true);
 
 document.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => switchTab(button.dataset.tab));
 $("save-profile").onclick = async () => {
