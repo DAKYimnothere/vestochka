@@ -661,7 +661,7 @@ def ask_ai(username: str, data: AiRequest, current_user: User = Depends(get_auth
     except Exception as error:
         raise HTTPException(status_code=502, detail=f"AI недоступен: {error}") from error
 
-@app.get("/", include_in_schema=False)
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 def web_app():
     return FileResponse(WEB_DIR / "index.html")
 

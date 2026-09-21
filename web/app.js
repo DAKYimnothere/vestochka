@@ -184,7 +184,17 @@ function connectRealtime() {
       window.setTimeout(() => closeCall(false), 1800);
     });
   };
-  socket.onclose = () => setTimeout(connectRealtime, 2000);
+  socket.onclose = (event) => {
+    if (state.socket !== socket) return;
+    if (event.code === 1008) {
+      state.socket = null;
+      showFeature("Сессия истекла. Войдите снова.");
+      return;
+    }
+    setTimeout(() => {
+      if (state.user && state.token && state.socket === socket) connectRealtime();
+    }, 2000);
+  };
   state.socket = socket;
 }
 function updateChatStatus(username) {
