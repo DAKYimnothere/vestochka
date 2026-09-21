@@ -165,13 +165,13 @@ class LoginWindow(QWidget):
 
     def handle_register(self):
         username = self.username_input.text().strip()
-        password = self.password_input.text().strip()
+        password = self.password_input.text()
         if not username or not password:
             self.status_label.setStyleSheet("color: #ef4444;")
             self.status_label.setText("Заполните все поля")
             return
 
-        pub_hex = generate_and_save_keys(username)
+        pub_hex = generate_and_save_keys(username, password)
         try:
             res = requests.post(f"{SERVER_URL}/register",
                                 json={"username": username, "password": password, "public_key": pub_hex})
@@ -187,10 +187,10 @@ class LoginWindow(QWidget):
 
     def handle_login(self):
         username = self.username_input.text().strip()
-        password = self.password_input.text().strip()
+        password = self.password_input.text()
         if not username or not password: return
 
-        private_key = load_private_key(username)
+        private_key = load_private_key(username, password)
         if not private_key:
             self.status_label.setStyleSheet("color: #ef4444;")
             self.status_label.setText("Ключ E2EE не найден на этом ПК")

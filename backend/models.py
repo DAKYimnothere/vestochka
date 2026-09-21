@@ -38,6 +38,18 @@ class LoginSession(Base):
     revoked = Column(Boolean, default=False, nullable=False)
     user = relationship("User", back_populates="sessions")
 
+class Contact(Base):
+    __tablename__ = "contacts"
+    id = Column(Integer, primary_key=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    contact_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+class Block(Base):
+    __tablename__ = "blocks"
+    id = Column(Integer, primary_key=True)
+    blocker_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    blocked_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
 class Story(Base):
     __tablename__ = "stories"
 
@@ -49,6 +61,7 @@ class Story(Base):
     music_name = Column(String(120), nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False)
+    likes = Column(Text, nullable=False, default="[]")
 
 
 class Message(Base):
@@ -57,8 +70,15 @@ class Message(Base):
     id = Column(Integer, primary_key=True, index=True)
     sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     recipient_username = Column(String(50), nullable=False, index=True)
-    encrypted_text = Column(Text, nullable=False)
+    encrypted_text = Column(Text, nullable=False, default="")
+    media_url = Column(String(500), nullable=True)
+    media_type = Column(String(16), nullable=True)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     read_at = Column(DateTime, nullable=True, index=True)
+    reply_to_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
+    reactions = Column(Text, nullable=False, default="{}")
+    deleted_for_sender = Column(Boolean, nullable=False, default=False)
+    deleted_for_recipient = Column(Boolean, nullable=False, default=False)
 
     sender = relationship("User", back_populates="sent_messages", foreign_keys=[sender_id])
+    reply_to = relationship("Message", remote_side=[id], uselist=False)

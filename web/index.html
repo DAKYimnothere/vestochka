@@ -2,20 +2,66 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Vestochka — живые разговоры</title>
   <link rel="stylesheet" href="/web/style.css">
+  <style>
+    @media (max-width: 700px) {
+      html, body { min-height: 100dvh; overflow: hidden; }
+      .app-shell { height: 100dvh; min-height: 100dvh; padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
+      .auth-card { width: min(100%, 470px); max-height: calc(100dvh - 16px); overflow: auto; margin: auto; padding: 34px 24px; border-radius: 18px; }
+      .auth-card h1 { font-size: clamp(38px, 12vw, 52px); }
+      .auth-actions { flex-direction: column; gap: 9px; }
+      .auth-actions button { width: 100%; min-height: 48px; }
+      .messenger { display: block; width: 100%; height: 100%; min-height: 0; border-radius: 8px; overflow: hidden; }
+      .sidebar { height: 170px; overflow: auto; padding: 14px 12px 10px; }
+      .nav-tabs { grid-template-columns: repeat(3, 1fr); gap: 4px; }
+      .nav-tab { text-align: center; padding: 11px 5px; font-size: 12px; }
+      .conversation { height: calc(100% - 170px); min-height: 0; }
+      .conversation-header { min-height: 64px; padding: max(10px, env(safe-area-inset-top)) 12px 10px; gap: 8px; }
+      .conversation-header #chat-heading { min-width: 0; overflow: hidden; }
+      .conversation-header #chat-heading strong, .conversation-header #chat-heading small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .messages { min-height: 0; padding: 18px 10px 12px; overscroll-behavior: contain; }
+      .message { max-width: 88%; }
+      .message-tools { position: static; opacity: 1; pointer-events: auto; margin-top: 7px; padding: 0; border: 0; box-shadow: none; background: transparent; }
+      .composer { display: flex; flex-wrap: nowrap; gap: 5px; padding: 8px 8px max(8px, env(safe-area-inset-bottom)); align-items: center; }
+      .composer .tool-btn { width: 36px; height: 38px; flex: 0 0 36px; padding: 0; font-size: 0; }
+      .composer .tool-btn:first-child { font-size: 11px; }
+      .composer .tool-btn:nth-child(2) { font-size: 18px; }
+      .voice-record-btn, .video-record-btn { width: 38px; height: 38px; flex: 0 0 38px; }
+      .recording-status { min-width: 0; width: 0; overflow: hidden; }
+      .composer input { min-width: 0; height: 40px; padding: 9px 10px; font-size: 16px; border-radius: 10px; }
+      .send-btn { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 11px; }
+      .reply-bar { padding: 7px 10px; }
+      .emoji-picker { right: 8px; bottom: 64px; max-width: calc(100% - 16px); overflow-x: auto; }
+      .audio-player { min-width: 0; width: min(100%, 300px); }
+      .panel-page { height: 100%; min-height: 0; overflow: auto; padding: 22px 14px calc(24px + env(safe-area-inset-bottom)); }
+      .panel-heading h2 { font-size: 30px; }
+      .setting-row { align-items: flex-start; flex-direction: column; gap: 9px; }
+      .setting-row select, .setting-row input { width: 100%; min-height: 42px; }
+      .profile-hero { align-items: flex-start; flex-wrap: wrap; }
+      .stories-head { margin-top: 24px; }
+      .story-actions { display: grid; grid-template-columns: 1fr 1fr; }
+      .story-actions button { min-height: 44px; }
+      .call-card, .editor-card, .public-profile-card, .story-viewer-card { max-height: calc(100dvh - 24px); overflow: auto; padding: 16px; border-radius: 14px; }
+      .video-stage, .video-stage video { min-height: 250px; }
+    }
+    @media (max-width: 380px) {
+      .composer .tool-btn:first-child, .conversation-header #chat-heading small { display: none; }
+      .message { max-width: 92%; }
+    }
+  </style>
 </head>
 <body>
   <main class="app-shell">
     <section id="auth-view" class="auth-card">
-      <div class="brand-mark">✦</div>
+      <div class="brand-mark" aria-label="Vestochka">✉</div>
       <p class="eyebrow">VESTOCHKA</p>
       <h1>Общайся ярче.</h1>
       <p class="muted">Мессенджер с музыкой, AI и живыми видеосообщениями.</p>
       <form id="auth-form">
         <input id="username" placeholder="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" required>
-        <input id="password" type="password" placeholder="Пароль" minlength="4" required>
+        <input id="password" type="password" placeholder="Пароль (минимум 12 символов)" minlength="12" maxlength="128" required>
         <div class="auth-actions">
           <button type="submit" class="primary">Войти</button>
           <button type="button" id="register-btn" class="ghost">Создать аккаунт</button>
@@ -27,7 +73,7 @@
     <section id="messenger-view" class="messenger hidden">
       <aside class="sidebar">
         <div class="sidebar-top">
-          <div class="brand-line"><span class="brand-mark small">✦</span><strong>vestochka</strong></div>
+          <div class="brand-line"><span class="brand-mark small">✉</span><strong>vestochka</strong></div>
           <button id="logout-btn" class="icon-btn" title="Выйти">↗</button>
         </div>
         <div class="profile-chip">
@@ -47,8 +93,8 @@
       </aside>
       <section id="chat-tab" class="conversation tab-content">
         <header class="conversation-header">
-          <div id="chat-avatar" class="avatar pastel">?</div>
-          <div><strong id="chat-name">Выберите контакт</strong><small id="chat-status">Ваши разговоры будут здесь</small></div>
+          <div id="chat-avatar" class="avatar pastel" title="Открыть профиль">?</div>
+          <div id="chat-heading" title="Открыть профиль"><strong id="chat-name">Выберите контакт</strong><small id="chat-status">Ваши разговоры будут здесь</small></div>
           <div class="header-actions">
             <button class="icon-btn call-btn" data-kind="voice" title="Аудиозвонок">☎</button>
             <button class="icon-btn call-btn" data-kind="video" title="Видеозвонок">▣</button>
@@ -57,10 +103,21 @@
         <div id="messages" class="messages">
           <div class="empty-state"><span>✦</span><h2>Тёплые разговоры</h2><p>Найди пользователя по username и начни общение.</p></div>
         </div>
+        <div id="reply-bar" class="reply-bar hidden"><span id="reply-label"></span><button id="cancel-reply" class="icon-btn" title="Отменить ответ">×</button></div>
+        <div id="emoji-picker" class="emoji-picker hidden" aria-label="Выбор реакции"><button data-emoji="❤️">❤️</button><button data-emoji="👍">👍</button><button data-emoji="😂">😂</button><button data-emoji="🔥">🔥</button><button data-emoji="😮">😮</button><button data-emoji="😢">😢</button><button data-emoji="👏">👏</button><button data-emoji="🎉">🎉</button></div>
         <div id="action-toast" class="action-toast" role="status"></div>
         <div class="composer">
           <button id="ai-btn" class="tool-btn" title="Спросить AI">AI</button>
           <button id="media-btn" class="tool-btn" title="Музыка и эффекты">♫</button>
+          <button id="voice-record-btn" class="voice-record-btn" title="Голосовое сообщение" aria-label="Записать голосовое сообщение">
+            <span class="pulse-ring"></span>
+            <span class="voice-icon">◉</span>
+          </button>
+          <button id="video-record-btn" class="video-record-btn" title="Кружочек" aria-label="Записать кружочек">
+            <span class="pulse-ring"></span>
+            <span class="video-icon">●</span>
+          </button>
+          <span id="recording-status" class="recording-status" aria-live="polite"></span>
           <input id="message-input" placeholder="Напишите сообщение..." disabled>
           <button id="send-btn" class="send-btn" disabled>➤</button>
         </div>
@@ -73,7 +130,9 @@
           <label>О себе<textarea id="profile-bio" class="form-input" maxlength="255" rows="3"></textarea></label>
           <label>Номер телефона<input id="profile-phone" class="form-input" placeholder="+7 ..."></label>
           <button id="save-profile" class="primary save-btn">Сохранить профиль</button>
-          <div class="stories-head"><div><p class="eyebrow">CIRCLE STORIES</p><h3>Мои stories · 24 часа</h3></div><button id="publish-story" class="primary story-publish-btn">＋ Опубликовать story</button><input id="story-file" type="file" accept="image/*,video/mp4,video/webm" hidden></div>
+          <div class="stories-head"><div><p class="eyebrow">CIRCLE STORIES</p><h3>Мои stories · 24 часа</h3></div><div class="story-actions"><button id="choose-story" class="ghost">Загрузить фото/видео</button><button id="publish-story" class="primary story-publish-btn" disabled>Опубликовать</button><input id="story-file" type="file" accept="image/*,video/mp4,video/webm" hidden></div></div>
+          <div id="story-preview" class="story-preview hidden"></div>
+          <p id="story-status" class="upload-status" role="status"></p>
           <input id="story-caption" class="form-input" placeholder="Подпись к story">
           <input id="story-music" class="form-input" placeholder="Музыка или настроение (например: Lo-fi sunset)">
           <div id="stories-list" class="stories-list"></div>
@@ -90,17 +149,19 @@
         <button id="save-settings" class="primary save-btn">Сохранить настройки</button>
         <div class="sessions-card"><h3>Активные сессии</h3><p class="muted">Сессии старше 24 часов автоматически завершаются.</p><div id="sessions-list"></div></div>
       </section>
-      <aside class="feature-panel">
-        <div class="feature-card gradient-card"><span class="feature-icon">✦</span><p class="eyebrow">VESTO AI</p><h3>Умный собеседник внутри чата</h3><p>Идеи, ответы и настроение — прямо в разговоре.</p><button id="ai-card-btn" class="text-btn">Попробовать →</button></div>
-        <div class="feature-card"><span class="feature-icon">◉</span><p class="eyebrow">CIRCLE FX</p><h3>Кружочки с саундтреком</h3><p>Добавляй музыку и мягкие эффекты к видеосообщениям.</p><button id="media-card-btn" class="text-btn">Открыть студию →</button></div>
-        <div id="feature-note" class="feature-note">Выбери контакт, чтобы начать.</div>
+      <aside class="feature-panel tools-panel">
+        <p class="eyebrow">ИНСТРУМЕНТЫ</p>
+        <h3>Разговор без лишнего</h3>
+        <p class="muted">Выберите контакт, чтобы написать, позвонить или открыть профиль.</p>
+        <button id="ai-card-btn" class="text-btn">Спросить AI →</button>
+        <div id="feature-note" class="feature-note">Выберите контакт, чтобы начать.</div>
       </aside>
     </section>
   </main>
   <div id="call-overlay" class="call-overlay hidden">
     <div class="call-card">
       <div class="call-card-head"><strong id="call-title">Звонок</strong><button id="end-call" class="icon-btn">×</button></div>
-      <div class="video-stage"><video id="remote-video" autoplay playsinline></video><video id="local-video" autoplay muted playsinline></video></div>
+      <div class="video-stage"><video id="remote-video" autoplay playsinline></video><video id="local-video" autoplay muted playsinline></video><div id="call-placeholder">Ожидание подключения…</div></div>
       <p id="call-status" class="muted">Подключение...</p>
     </div>
   </div>
@@ -121,8 +182,16 @@
       <p id="public-id" class="muted"></p>
       <p id="public-bio" class="public-bio"></p>
       <p id="public-phone" class="muted"></p>
-      <div class="public-actions"><button id="public-message" class="primary">Написать сообщение</button></div>
+      <div class="public-actions"><button id="public-message" class="primary">Написать сообщение</button><button id="public-contact" class="ghost">Добавить в контакты</button><button id="public-block" class="danger-btn">Заблокировать</button><button id="public-delete-chat" class="ghost">Удалить чат</button></div>
       <div><p class="eyebrow">CIRCLE STORIES</p><div id="public-stories" class="stories-list"></div></div>
+    </div>
+  </div>
+  <div id="story-viewer" class="call-overlay hidden">
+    <div class="story-viewer-card">
+      <button id="close-story-viewer" class="icon-btn story-viewer-close">×</button>
+      <div id="story-viewer-media"></div>
+      <p id="story-viewer-caption"></p>
+      <button id="story-like" class="story-like">♡ <span id="story-like-count">0</span></button>
     </div>
   </div>
   <script src="/web/app.js"></script>

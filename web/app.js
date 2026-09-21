@@ -1,4 +1,4 @@
-const state = { user: null, active: null, chats: new Map(), token: null, socket: null, peer: null, stream: null, avatarImage: null, avatarRotation: 0, presence: new Map(), typingTimer: null };
+const state = { user: null, active: null, chats: new Map(), token: null, socket: null, peer: null, stream: null, avatarImage: null, avatarRotation: 0, presence: new Map(), typingTimer: null, privateKey: null, pendingIce: [], selectedStoryFile: null, storyPreviewUrl: null, callTimeout: null, mediaRecorder: null, mediaChunks: [], mediaMode: null, mediaTimer: null, isRecording: false };
 const $ = (id) => document.getElementById(id);
 const initials = (name) => (name || "?").slice(0, 1).toUpperCase();
 const setStatus = (text, error = true) => { $("auth-status").textContent = text; $("auth-status").style.color = error ? "#d46e7b" : "#5b9b7d"; };
@@ -8,8 +8,82 @@ async function api(url, options = {}) {
   if (state.token) headers.Authorization = "Bearer " + state.token;
   const response = await fetch(url, {...options, headers: {...headers, ...(options.headers || {})}});
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || "Не удалось выполнить запрос");
+  if (!response.ok) {
+    const detail = Array.isArray(body.detail)
+      ? body.detail.map(item => item.msg || "Некорректное значение").join("; ")
+      : typeof body.detail === "string" ? body.detail : "Не удалось выполнить запрос";
+    throw new Error(detail);
+  }
   return body;
+}
+const bytesToBase64 = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes)));
+const base64ToBytes = value => Uint8Array.from(atob(value), char => char.charCodeAt(0));
+async function createBrowserKeyPair(username) {
+  const pair = await crypto.subtle.generateKey({name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256"}, true, ["encrypt", "decrypt"]);
+  const privateJwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
+  return {publicKey: bytesToBase64(await crypto.subtle.exportKey("spki", pair.publicKey)), privateKey: pair.privateKey};
+}
+async function loadBrowserPrivateKey(username) {
+  const stored = localStorage.getItem(`vestochka-key-${username}`);
+  if (!stored) return null;
+  try { return await crypto.subtle.importKey("jwk", JSON.parse(stored), {name: "RSA-OAEP", hash: "SHA-256"}, true, ["decrypt"]); }
+  catch (_) { return null; }
+}
+async function saveBrowserPublicKey(username, privateKey) {
+  const privateJwk = await crypto.subtle.exportKey("jwk", privateKey);
+  const publicJwk = {kty: privateJwk.kty, n: privateJwk.n, e: privateJwk.e, alg: privateJwk.alg, ext: true, key_ops: ["encrypt"]};
+  localStorage.setItem(`vestochka-public-key-${username}`, JSON.stringify(publicJwk));
+}
+async function exportBrowserPublicKey(username) {
+  const stored = localStorage.getItem(`vestochka-key-${username}`);
+  if (!stored) throw new Error("Ключ шифрования не найден на этом устройстве");
+  const privateJwk = JSON.parse(stored);
+  const publicJwk = {kty: privateJwk.kty, n: privateJwk.n, e: privateJwk.e, alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"]};
+  const publicKey = await crypto.subtle.importKey("jwk", publicJwk, {name: "RSA-OAEP", hash: "SHA-256"}, true, ["encrypt"]);
+  return bytesToBase64(await crypto.subtle.exportKey("spki", publicKey));
+}
+async function importOwnPublicKey(username) {
+  const stored = localStorage.getItem(`vestochka-key-${username}`);
+  if (!stored) throw new Error("Ключ шифрования не найден на этом устройстве");
+  const privateJwk = JSON.parse(stored);
+  const publicJwk = {kty: privateJwk.kty, n: privateJwk.n, e: privateJwk.e, alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"]};
+  return crypto.subtle.importKey("jwk", publicJwk, {name: "RSA-OAEP", hash: "SHA-256"}, false, ["encrypt"]);
+}
+async function importPublicKey(value) {
+  let bytes;
+  try {
+    bytes = /^[0-9a-f]+$/i.test(value) ? Uint8Array.from(value.match(/.{1,2}/g).map(part => parseInt(part, 16))) : base64ToBytes(value);
+    const pem = new TextDecoder().decode(bytes);
+    if (pem.includes("BEGIN PUBLIC KEY")) bytes = base64ToBytes(pem.replace(/-----[^-]+-----/g, "").replace(/\s/g, ""));
+    return await crypto.subtle.importKey("spki", bytes, {name: "RSA-OAEP", hash: "SHA-256"}, false, ["encrypt"]);
+  } catch (_) { throw new Error("У собеседника нет корректного ключа шифрования"); }
+}
+async function encryptMessage(text, username) {
+  const recipient = await api(`/get_key/${encodeURIComponent(username)}`);
+  const publicKey = await importPublicKey(recipient.public_key);
+  const senderPublicKey = await importOwnPublicKey(state.user.username);
+  const aesKey = await crypto.subtle.generateKey({name: "AES-GCM", length: 256}, true, ["encrypt", "decrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({name: "AES-GCM", iv}, aesKey, new TextEncoder().encode(text));
+  const wrappedKey = await crypto.subtle.encrypt({name: "RSA-OAEP"}, publicKey, await crypto.subtle.exportKey("raw", aesKey));
+  const senderWrappedKey = await crypto.subtle.encrypt({name: "RSA-OAEP"}, senderPublicKey, await crypto.subtle.exportKey("raw", aesKey));
+  return btoa(JSON.stringify({v: 2, k: bytesToBase64(wrappedKey), sk: bytesToBase64(senderWrappedKey), i: bytesToBase64(iv), d: bytesToBase64(ciphertext)}));
+}
+async function decryptMessage(value, isMine = false) {
+  try {
+    if (typeof value !== "string") return "";
+    const envelope = JSON.parse(atob(value));
+    if (![1, 2].includes(envelope.v) || !state.privateKey) return "[Не удалось расшифровать]";
+    const wrappedKey = envelope.v === 2 && isMine && envelope.sk ? envelope.sk : envelope.k;
+    const rawKey = await crypto.subtle.decrypt({name: "RSA-OAEP"}, state.privateKey, base64ToBytes(wrappedKey));
+    const aesKey = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["decrypt"]);
+    const plaintext = await crypto.subtle.decrypt({name: "AES-GCM", iv: base64ToBytes(envelope.i)}, aesKey, base64ToBytes(envelope.d));
+    return new TextDecoder().decode(plaintext);
+  } catch (_) {
+    // Messages created before E2EE are stored as plain text.
+    if (!/^[A-Za-z0-9+/]+=*$/.test(value) || value.length < 80) return value;
+    return "[Старое зашифрованное сообщение недоступно]";
+  }
 }
 function showMessenger(user) {
   state.user = user;
@@ -56,7 +130,9 @@ async function loadSessions() {
 async function loadStories() {
   try {
     const stories = await api("/me/stories");
+    state.storyItems = stories;
     $("stories-list").innerHTML = stories.map(renderStoryCard).join("");
+    bindStoryCards($("stories-list"));
   } catch (error) { $("stories-list").textContent = error.message; }
 }
 function connectRealtime() {
@@ -67,7 +143,7 @@ function connectRealtime() {
     if (data.type === "message" && data.from_user === state.active) {
       const messages = state.chats.get(state.active) || [];
       if (messages.some(message => message.sender === data.from_user && message.encrypted_text === data.encrypted_msg && Date.now() - new Date(message.timestamp).getTime() < 10000)) return;
-      messages.push({sender: data.from_user, encrypted_text: data.encrypted_msg, timestamp: new Date().toISOString()});
+      messages.push({id: data.message_id, sender: data.from_user, encrypted_text: data.encrypted_msg, timestamp: new Date().toISOString(), reply_to_id: data.reply_to_id, reactions: data.reactions || {}, media_url: data.media_url || null, media_type: data.media_type || null});
       state.chats.set(state.active, messages);
       renderMessages(messages);
       markChatRead(data.from_user);
@@ -79,6 +155,11 @@ function connectRealtime() {
       loadRecentChats();
     }
     if (data.type === "typing" || data.type === "recording") {
+      if (data.active === false) {
+        state.presence.delete(data.from_user);
+        if (data.from_user === state.active) updateChatStatus(data.from_user);
+        return;
+      }
       state.presence.set(data.from_user, {...data, expires_at: Date.now() + 4000});
       if (data.from_user === state.active) updateChatStatus(data.from_user);
       window.setTimeout(() => {
@@ -98,7 +179,10 @@ function connectRealtime() {
       state.chats.set(state.active, messages);
       renderMessages(messages);
     }
-    handleCallSignal(data);
+    handleCallSignal(data).catch(error => {
+      $("call-status").textContent = "Ошибка звонка: " + error.message;
+      window.setTimeout(() => closeCall(false), 1800);
+    });
   };
   socket.onclose = () => setTimeout(connectRealtime, 2000);
   state.socket = socket;
@@ -134,7 +218,9 @@ async function refreshActiveChat() {
   }
 }
 function sendSignal(payload) {
-  if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify({...payload, to_user: state.active}));
+  if (state.socket?.readyState !== WebSocket.OPEN) return false;
+  state.socket.send(JSON.stringify({...payload, to_user: state.active}));
+  return true;
 }
 async function openCall(kind, incomingOffer = null, fromUser = null) {
   if (!state.active && !fromUser) return showFeature("Сначала выбери контакт.");
@@ -147,46 +233,88 @@ async function openCall(kind, incomingOffer = null, fromUser = null) {
   }
   $("call-overlay").classList.remove("hidden");
   $("call-title").textContent = `${kind === "video" ? "Видеозвонок" : "Аудиозвонок"} · @${state.active}`;
+  $("call-status").textContent = incomingOffer ? "Входящий звонок принят…" : "Вызов отправлен…";
+  $("call-placeholder").textContent = kind === "video" ? "Ожидание видео…" : "Ожидание собеседника…";
   $("local-video").srcObject = state.stream;
-  state.peer = new RTCPeerConnection({iceServers: [{urls: "stun:stun.l.google.com:19302"}]});
+  if (!incomingOffer) state.pendingIce = [];
+  state.peer = new RTCPeerConnection({iceServers: [{urls: "stun:stun.l.google.com:19302"}, {urls: "stun:stun1.l.google.com:19302"}]});
   state.stream.getTracks().forEach(track => state.peer.addTrack(track, state.stream));
   state.peer.ontrack = event => { $("remote-video").srcObject = event.streams[0]; };
   state.peer.onicecandidate = event => { if (event.candidate) sendSignal({type: "ice_candidate", candidate: event.candidate}); };
+  state.peer.onconnectionstatechange = () => {
+    const status = state.peer?.connectionState;
+    $("call-status").textContent = status === "connected" ? "Соединение установлено" : status === "failed" ? "Не удалось установить соединение" : status === "disconnected" ? "Соединение прервано" : "Подключение…";
+    $("call-placeholder").classList.toggle("hidden", status === "connected");
+    if (status === "failed" || status === "disconnected") window.setTimeout(() => closeCall(false), 1800);
+  };
+  clearTimeout(state.callTimeout);
+  state.callTimeout = window.setTimeout(() => {
+    if (state.peer && state.peer.connectionState !== "connected") {
+      $("call-status").textContent = "Собеседник не ответил";
+      window.setTimeout(() => closeCall(), 1800);
+    }
+  }, 30000);
   if (incomingOffer) {
     await state.peer.setRemoteDescription(incomingOffer);
+    for (const candidate of state.pendingIce) await state.peer.addIceCandidate(candidate);
+    state.pendingIce = [];
     const answer = await state.peer.createAnswer();
     await state.peer.setLocalDescription(answer);
     sendSignal({type: "call_answer", sdp: answer});
   } else {
     const offer = await state.peer.createOffer();
     await state.peer.setLocalDescription(offer);
-    sendSignal({type: "call_offer", sdp: offer, kind});
+    if (!sendSignal({type: "call_offer", sdp: offer, kind})) {
+      $("call-status").textContent = "Нет связи с сервером";
+      window.setTimeout(() => closeCall(false), 1800);
+    }
   }
 }
 async function handleCallSignal(data) {
   if (data.type === "call_offer") {
     if (!confirm(`Входящий звонок от @${data.from_user}. Принять?`)) return;
     await openCall(data.kind || "video", data.sdp, data.from_user);
+  } else if (data.type === "call_unavailable") {
+    $("call-status").textContent = "Собеседник сейчас не в сети";
+    window.setTimeout(() => closeCall(false), 1800);
   } else if (data.type === "call_answer" && state.peer) {
     await state.peer.setRemoteDescription(data.sdp);
-  } else if (data.type === "ice_candidate" && state.peer && data.candidate) {
-    await state.peer.addIceCandidate(data.candidate);
+    for (const candidate of state.pendingIce) await state.peer.addIceCandidate(candidate);
+    state.pendingIce = [];
+  } else if (data.type === "ice_candidate" && data.candidate) {
+    if (state.peer?.remoteDescription) await state.peer.addIceCandidate(data.candidate);
+    else state.pendingIce.push(data.candidate);
   } else if (data.type === "call_end") {
     closeCall(false);
   }
 }
 function closeCall(send = true) {
   if (send) sendSignal({type: "call_end"});
+  clearTimeout(state.callTimeout);
   state.peer?.close(); state.stream?.getTracks().forEach(track => track.stop());
-  state.peer = null; state.stream = null; $("remote-video").srcObject = null; $("local-video").srcObject = null; $("call-overlay").classList.add("hidden");
+  state.peer = null; state.stream = null; state.pendingIce = []; $("remote-video").srcObject = null; $("local-video").srcObject = null; $("call-placeholder").classList.remove("hidden"); $("call-overlay").classList.add("hidden");
 }
 async function authenticate(register = false) {
   const username = $("username").value.trim(), password = $("password").value;
   try {
-    const result = await api(register ? "/register" : "/login", {method: "POST", body: JSON.stringify({username, password, public_key: ""})});
+    if (register && password.length < 12) throw new Error("Пароль должен содержать минимум 12 символов");
+    const privateKey = register ? null : await loadBrowserPrivateKey(username);
+    if (!register && !privateKey) throw new Error("Ключ шифрования не найден на этом устройстве");
+    const keyData = register ? await createBrowserKeyPair(username) : {privateKey};
+    if (register) {
+      const privateJwk = await crypto.subtle.exportKey("jwk", keyData.privateKey);
+      localStorage.setItem(`vestochka-key-${username}`, JSON.stringify(privateJwk));
+      const publicJwk = await crypto.subtle.exportKey("jwk", await crypto.subtle.importKey("spki", base64ToBytes(keyData.publicKey), {name: "RSA-OAEP", hash: "SHA-256"}, true, ["encrypt"]));
+      localStorage.setItem(`vestochka-public-key-${username}`, JSON.stringify(publicJwk));
+    } else if (!localStorage.getItem(`vestochka-public-key-${username}`)) await saveBrowserPublicKey(username, keyData.privateKey);
+    const publicKey = register ? keyData.publicKey : await exportBrowserPublicKey(username);
+    const result = await api(register ? "/register" : "/login", {method: "POST", body: JSON.stringify({username, password, public_key: publicKey})});
     state.token = result.token;
+    state.privateKey = keyData.privateKey;
     showMessenger(result.user);
-  } catch (error) { setStatus(error.message); }
+  } catch (error) {
+    setStatus(error.message === "Taken" ? "Этот username уже занят. Войдите или выберите другой." : error.message);
+  }
 }
 function renderSearch(users) {
   $("search-results").innerHTML = users.map(user => `<div class="result" data-username="${user.username}"><div class="avatar result-avatar" style="${user.avatar_url ? `background-image:url('${user.avatar_url}')` : ""}">${user.avatar_url ? "" : initials(user.username)}</div><div class="result-info"><strong>${escapeHtml(user.display_name || "Пользователь")}</strong><small>@${user.username} · ID ${user.id}</small></div><button class="result-action profile-action" title="Открыть профиль">◉</button><button class="result-action chat-action" title="Написать">➤</button></div>`).join("");
@@ -219,27 +347,115 @@ async function openPublicProfile(username) {
     $("public-id").textContent = `Постоянный ID: ${profile.id} · ${profile.online ? "в сети" : "не в сети"}`;
     $("public-bio").textContent = profile.bio || "Пользователь пока ничего не написал о себе.";
     $("public-phone").textContent = profile.phone ? `Телефон: ${profile.phone}` : "";
+    $("public-message").classList.toggle("hidden", profile.blocked);
+    $("public-contact").classList.toggle("hidden", profile.blocked);
+    $("public-block").classList.remove("hidden");
+    $("public-delete-chat").classList.toggle("hidden", profile.blocked);
+    $("public-contact").textContent = profile.contact ? "Убрать из контактов" : "Добавить в контакты";
+    $("public-block").textContent = profile.blocked ? "Разблокировать" : "Заблокировать";
+    state.storyItems = profile.stories;
     $("public-stories").innerHTML = profile.stories.length ? profile.stories.map(renderStoryCard).join("") : `<p class="muted">Активных stories пока нет.</p>`;
+    bindStoryCards($("public-stories"));
     $("public-message").onclick = () => { $("public-profile-modal").classList.add("hidden"); openChat(profile.username); };
+    $("public-contact").onclick = async () => {
+      try { const result = await api(`/users/${encodeURIComponent(profile.username)}/contact`, {method: profile.contact ? "DELETE" : "POST"}); profile.contact = result.contact; $("public-contact").textContent = profile.contact ? "Убрать из контактов" : "Добавить в контакты"; showFeature(profile.contact ? "Добавлено в контакты." : "Удалено из контактов."); } catch (error) { showFeature(error.message); }
+    };
+    $("public-block").onclick = async () => {
+      const blocked = !profile.blocked;
+      try { await api(`/users/${encodeURIComponent(profile.username)}/block`, {method: blocked ? "POST" : "DELETE"}); profile.blocked = blocked; $("public-block").textContent = blocked ? "Разблокировать" : "Заблокировать"; $("public-message").classList.toggle("hidden", blocked); $("public-contact").classList.toggle("hidden", blocked); $("public-delete-chat").classList.remove("hidden"); showFeature(blocked ? "Пользователь заблокирован." : "Пользователь разблокирован."); } catch (error) { showFeature(error.message); }
+    };
+    $("public-delete-chat").onclick = async () => {
+      const deleteForAll = window.confirm("Удалить чат у обоих пользователей? Нажмите Отмена, чтобы удалить только у себя.");
+      try { await api(`/chats/${encodeURIComponent(profile.username)}/${deleteForAll ? "all" : "me"}`, {method:"DELETE"}); $("public-profile-modal").classList.add("hidden"); if (state.active === profile.username) { state.chats.delete(profile.username); renderMessages([]); } loadRecentChats(); showFeature(deleteForAll ? "Чат удалён у всех." : "Чат удалён у вас."); } catch (error) { showFeature(error.message); }
+    };
     $("public-profile-modal").classList.remove("hidden");
   } catch (error) { showFeature(error.message); }
 }
 function renderStoryCard(story) {
-  return `<article class="story-card">${story.media_type === "video" ? `<video src="${story.media_url}" controls></video>` : `<img src="${story.media_url}" alt="Story">`}<p>${escapeHtml(story.caption || "")}${story.music_name ? `<br>♫ ${escapeHtml(story.music_name)}` : ""}</p></article>`;
+  let likes = story.likes;
+  if (typeof likes === "string") { try { likes = JSON.parse(likes); } catch (_) { likes = []; } }
+  likes = Array.isArray(likes) ? likes : [];
+  return `<article class="story-card" data-story-id="${story.id}"><button class="story-open" title="Открыть story">${story.media_type === "video" ? `<video src="${story.media_url}" muted></video>` : `<img src="${story.media_url}" alt="Story">`}</button><div class="story-card-footer"><p>${escapeHtml(story.caption || "")}${story.music_name ? `<br>♫ ${escapeHtml(story.music_name)}` : ""}</p><button class="story-card-like" title="Нравится">♡ ${likes.length}</button></div></article>`;
+}
+function bindStoryCards(container) {
+  container.querySelectorAll(".story-card").forEach(card => {
+    const story = (state.storyItems || []).find(item => String(item.id) === card.dataset.storyId);
+    card.querySelector(".story-open").onclick = () => openStoryViewer(story);
+    card.querySelector(".story-card-like").onclick = event => { event.stopPropagation(); reactToStory(story); };
+  });
+}
+function openStoryViewer(story) {
+  if (!story) return;
+  state.activeStory = story;
+  $("story-viewer-media").innerHTML = story.media_type === "video" ? `<video src="${story.media_url}" controls autoplay></video>` : `<img src="${story.media_url}" alt="Story">`;
+  $("story-viewer-caption").textContent = story.caption || "";
+  let likes = story.likes; if (typeof likes === "string") { try { likes = JSON.parse(likes); } catch (_) { likes = []; } }
+  $("story-like-count").textContent = Array.isArray(likes) ? likes.length : 0;
+  $("story-viewer").classList.remove("hidden");
+}
+async function reactToStory(story) {
+  if (!story) return;
+  let likes = typeof story.likes === "string" ? JSON.parse(story.likes || "[]") : (story.likes || []);
+  const liked = !likes.includes(state.user.username);
+  try { const result = await api(`/stories/${story.id}/reaction`, {method:"POST", body:JSON.stringify({liked})}); story.likes = likes.filter(name => name !== state.user.username); if (liked) story.likes.push(state.user.username); $("story-like-count").textContent = result.count; showFeature(liked ? "Лайк поставлен." : "Лайк убран."); } catch (error) { showFeature(error.message); }
 }
 async function searchUsers(query) {
   if (query.length < 3) { $("search-results").innerHTML = ""; return; }
   try { renderSearch(await api(`/users/search?q=${encodeURIComponent(query)}`)); } catch (error) { $("search-results").textContent = error.message; }
 }
-function renderMessages(messages) {
+async function renderMessages(messages) {
   const box = $("messages");
-  box.innerHTML = messages.length ? messages.map(message => {
+  const decrypted = await Promise.all(messages.map(message => decryptMessage(message.encrypted_text, message.sender === state.user.username)));
+  box.innerHTML = messages.length ? messages.map((message, index) => {
     const mine = message.sender === state.user.username;
     const ticks = mine ? `<span class="message-ticks ${message.read_at ? "read" : ""}" title="${message.read_at ? "Прочитано" : "Отправлено"}">${message.read_at ? "✓✓" : "✓"}</span>` : "";
-    return `<div class="message ${mine ? "mine" : ""}"><div class="message-text">${escapeHtml(message.encrypted_text)}</div><time>${new Date(message.timestamp).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})} ${ticks}</time></div>`;
+    const reactions = Object.entries(message.reactions || {}).filter(([, users]) => users.length).map(([emoji, users]) => `<button class="reaction-chip" data-emoji="${emoji}">${emoji} ${users.length}</button>`).join("");
+    const replyMessage = message.reply_to_id ? messages.find(item => item.id === message.reply_to_id) : null;
+    const replyIndex = replyMessage ? messages.indexOf(replyMessage) : -1;
+    const reply = replyMessage ? `<small class="reply-reference">${escapeHtml((decrypted[replyIndex] || (message.media_type === 'audio' ? 'Голосовое сообщение' : message.media_type === 'video' ? 'Кружочек' : 'Сообщение')).slice(0, 120))}</small>` : "";
+    const mediaMarkup = message.media_url ? (message.media_type === 'audio' ? `<div class="audio-player"><audio class="audio-source" preload="metadata" src="${message.media_url}"></audio><button class="audio-play" type="button" aria-label="Воспроизвести голосовое сообщение"><span>▶</span></button><div class="audio-details"><input class="audio-progress" type="range" min="0" max="100" value="0" step="0.1" aria-label="Позиция голосового сообщения"><div class="audio-meta"><span class="audio-label">Голосовое</span><span class="audio-time">0:00</span></div></div></div>` : `<video controls class="media-message" src="${message.media_url}"></video>`) : "";
+    const textMarkup = message.media_url ? "" : `<div class="message-text">${escapeHtml(decrypted[index])}</div>`;
+    return `<div class="message ${mine ? "mine" : ""}" data-message-id="${message.id || ""}">${reply}${mediaMarkup || textMarkup}<div class="message-tools"><button class="message-action reply-action" title="Ответить">↩</button><button class="message-action reaction-action" title="Реакция">😊</button>${reactions}</div><time>${new Date(message.timestamp).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})} ${ticks}</time></div>`;
   }).join("") : `<div class="empty-state"><span>✦</span><h2>Первое сообщение</h2><p>Добавь немного тепла в этот чат.</p></div>`;
+  box.querySelectorAll(".reply-action").forEach(button => button.onclick = () => { const message = messages.find(item => String(item.id) === button.closest(".message").dataset.messageId); beginReply(message, decrypted[messages.indexOf(message)]); });
+  box.querySelectorAll(".reaction-action").forEach(button => button.onclick = () => chooseReaction(button.closest(".message").dataset.messageId));
+  bindAudioPlayers(box);
   box.scrollTop = box.scrollHeight;
 }
+function formatAudioTime(seconds) {
+  if (!Number.isFinite(seconds)) return "0:00";
+  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+}
+function bindAudioPlayers(container) {
+  container.querySelectorAll(".audio-player").forEach(player => {
+    const audio = player.querySelector(".audio-source");
+    const button = player.querySelector(".audio-play");
+    const progress = player.querySelector(".audio-progress");
+    const time = player.querySelector(".audio-time");
+    const updateProgress = () => {
+      const percent = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
+      progress.value = percent;
+      time.textContent = `${formatAudioTime(audio.currentTime)} / ${formatAudioTime(audio.duration)}`;
+      player.style.setProperty("--audio-progress", `${percent}%`);
+    };
+    button.onclick = async () => {
+      if (audio.paused) {
+        document.querySelectorAll(".audio-source").forEach(other => { if (other !== audio) other.pause(); });
+        await audio.play();
+      } else audio.pause();
+    };
+    audio.onloadedmetadata = updateProgress;
+    audio.ontimeupdate = updateProgress;
+    audio.onplay = () => { button.classList.add("playing"); button.querySelector("span").textContent = "Ⅱ"; };
+    audio.onpause = () => { button.classList.remove("playing"); button.querySelector("span").textContent = "▶"; };
+    audio.onended = () => { progress.value = 0; audio.currentTime = 0; updateProgress(); };
+    progress.oninput = () => { if (audio.duration) audio.currentTime = (Number(progress.value) / 100) * audio.duration; };
+    updateProgress();
+  });
+}
+function beginReply(message, content) { if (!message) return; state.replyTo = message; $("reply-label").textContent = `Ответ: ${(content || "Сообщение").slice(0, 120)}`; $("reply-bar").classList.remove("hidden"); $("message-input").focus(); }
+function chooseReaction(messageId) { state.reactionMessageId = Number(messageId); $("emoji-picker").classList.remove("hidden"); }
+async function reactToMessage(messageId, emoji) { try { const result = await api(`/messages/${state.user.username}/${messageId}/reaction`, {method:"POST", body:JSON.stringify({emoji})}); const messages = state.chats.get(state.active) || []; const message = messages.find(item => item.id === messageId); if (message) message.reactions = result.reactions; renderMessages(messages); } catch (error) { showFeature(error.message); } }
 function escapeHtml(value) { return value.replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[char])); }
 async function openChat(username) {
   state.active = username; $("chat-name").textContent = `@${username}`; $("chat-status").textContent = "В сети · защищённый разговор";
@@ -258,7 +474,85 @@ async function markChatRead(username) {
 async function sendMessage() {
   const input = $("message-input"), text = input.value.trim();
   if (!text || !state.active) return;
-  try { await api(`/messages/${state.user.username}`, {method: "POST", body: JSON.stringify({to_user: state.active, text})}); input.value = ""; const messages = state.chats.get(state.active) || []; messages.push({sender: state.user.username, encrypted_text: text, timestamp: new Date().toISOString()}); state.chats.set(state.active, messages); renderMessages(messages); loadRecentChats(); } catch (error) { $("feature-note").textContent = error.message; }
+  try { const encryptedText = await encryptMessage(text, state.active); const result = await api(`/messages/${state.user.username}`, {method: "POST", body: JSON.stringify({to_user: state.active, text: encryptedText, reply_to_id: state.replyTo?.id || null})}); input.value = ""; state.replyTo = null; $("reply-bar").classList.add("hidden"); const messages = state.chats.get(state.active) || []; messages.push({id: result.id, sender: state.user.username, encrypted_text: encryptedText, timestamp: result.timestamp, reply_to_id: result.reply_to_id, reactions: {}}); state.chats.set(state.active, messages); renderMessages(messages); loadRecentChats(); } catch (error) { $("feature-note").textContent = error.message; }
+}
+
+function getRecordingMimeType(mediaType) {
+  const candidates = mediaType === "video"
+    ? ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]
+    : ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+  return candidates.find(type => MediaRecorder.isTypeSupported(type)) || "";
+}
+async function sendMediaMessage(mediaType) {
+  if (!state.active) return showFeature("Сначала выбери контакт.");
+  if (!navigator.mediaDevices?.getUserMedia) return showFeature("Запись недоступна в этом браузере.");
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: mediaType === "video" });
+    const mimeType = getRecordingMimeType(mediaType);
+    const recorder = new MediaRecorder(stream, mimeType ? {mimeType} : undefined);
+    state.mediaRecorder = recorder;
+    state.mediaChunks = [];
+    state.mediaMode = mediaType;
+    recorder.ondataavailable = (event) => { if (event.data.size) state.mediaChunks.push(event.data); };
+    recorder.onstop = async () => {
+      const blob = new Blob(state.mediaChunks, {type: recorder.mimeType || mimeType || (mediaType === "video" ? "video/webm" : "audio/webm")});
+      const form = new FormData();
+      form.append('file', blob, mediaType === 'video' ? 'circle.webm' : 'voice.webm');
+      form.append('to_user', state.active);
+      form.append('media_type', mediaType);
+      if (state.replyTo?.id) form.append('reply_to_id', String(state.replyTo.id));
+      try {
+        const result = await api(`/messages/${state.user.username}/media?to_user=${encodeURIComponent(state.active)}&media_type=${mediaType}${state.replyTo?.id ? `&reply_to_id=${state.replyTo.id}` : ''}`, {method: 'POST', body: form});
+        const messages = state.chats.get(state.active) || [];
+        messages.push({id: result.id, sender: state.user.username, encrypted_text: '', timestamp: result.timestamp, reply_to_id: result.reply_to_id, reactions: {}, media_url: result.media_url, media_type: result.media_type});
+        state.chats.set(state.active, messages);
+        renderMessages(messages);
+        loadRecentChats();
+        showFeature(mediaType === 'video' ? 'Кружочек отправлен.' : 'Голосовое сообщение отправлено.');
+      } catch (error) { showFeature(error.message); }
+      stream.getTracks().forEach(track => track.stop());
+      state.isRecording = false;
+      $(mediaType === 'video' ? 'video-record-btn' : 'voice-record-btn').classList.remove('recording');
+      $("recording-status").textContent = "";
+      clearInterval(state.mediaTimer);
+      state.replyTo = null;
+      $("reply-bar").classList.add("hidden");
+    };
+    recorder.start();
+    state.isRecording = true;
+    const button = $(mediaType === 'video' ? 'video-record-btn' : 'voice-record-btn');
+    button.classList.add('recording');
+    const startedAt = Date.now();
+    $("recording-status").textContent = "00:00";
+    clearInterval(state.mediaTimer);
+    state.mediaTimer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      $("recording-status").textContent = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
+    }, 250);
+    state.mediaTimeout = setTimeout(() => {
+      if (state.mediaRecorder && state.isRecording) {
+        state.mediaRecorder.stop();
+      }
+    }, mediaType === 'video' ? 15000 : 45000);
+    showFeature(mediaType === 'video' ? 'Запись кружочка…' : 'Запись голосового…');
+  } catch (error) {
+    stream?.getTracks().forEach(track => track.stop());
+    state.mediaRecorder = null;
+    state.isRecording = false;
+    $(mediaType === 'video' ? 'video-record-btn' : 'voice-record-btn').classList.remove('recording');
+    $("recording-status").textContent = "";
+    showFeature(error.message || "Не удалось начать запись.");
+  }
+}
+
+function stopMediaRecording() {
+  if (state.mediaRecorder && state.isRecording) {
+    state.mediaRecorder.stop();
+    state.isRecording = false;
+    clearTimeout(state.mediaTimeout);
+    $(state.mediaMode === 'video' ? 'video-record-btn' : 'voice-record-btn').classList.remove('recording');
+  }
 }
 function showFeature(text) {
   $("feature-note").textContent = text;
@@ -277,6 +571,21 @@ $("message-input").oninput = () => {
   state.typingTimer = setTimeout(() => sendPresence("typing", false), 1200);
 };
 $("logout-btn").onclick = () => location.reload();
+$("voice-record-btn").onclick = () => {
+  if (state.isRecording) {
+    stopMediaRecording();
+    return;
+  }
+  sendMediaMessage("audio");
+};
+$("video-record-btn").onclick = () => {
+  if (state.isRecording) {
+    stopMediaRecording();
+    return;
+  }
+  sendMediaMessage("video");
+};
+
 document.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => switchTab(button.dataset.tab));
 $("save-profile").onclick = async () => {
   try {
@@ -323,13 +632,33 @@ function drawAvatarPreview() {
   context.drawImage(image, -image.width * scale / 2, -image.height * scale / 2, image.width * scale, image.height * scale);
   context.restore();
 }
-$("publish-story").onclick = () => $("story-file").click();
-$("story-file").onchange = async (event) => {
-  if (!event.target.files[0]) return;
-  const form = new FormData(); form.append("file", event.target.files[0]); form.append("caption", $("story-caption").value); form.append("music_name", $("story-music").value);
-  try { await api("/me/stories/upload", {method:"POST", body:form, headers:{}}); $("story-caption").value = ""; $("story-music").value = ""; loadStories(); showFeature("Story опубликована на 24 часа."); } catch (error) { showFeature(error.message); }
+$("choose-story").onclick = () => $("story-file").click();
+$("story-file").onchange = (event) => {
+  state.selectedStoryFile = event.target.files[0] || null;
+  $("publish-story").disabled = !state.selectedStoryFile;
+  if (!state.selectedStoryFile) return;
+  if (state.storyPreviewUrl) URL.revokeObjectURL(state.storyPreviewUrl);
+  state.storyPreviewUrl = URL.createObjectURL(state.selectedStoryFile);
+  const preview = $("story-preview");
+  const isVideo = state.selectedStoryFile.type.startsWith("video/");
+  preview.innerHTML = isVideo ? `<video src="${state.storyPreviewUrl}" controls></video>` : `<img src="${state.storyPreviewUrl}" alt="Предпросмотр story">`;
+  preview.classList.remove("hidden");
+  $("story-status").textContent = `Файл выбран: ${state.selectedStoryFile.name}`;
+};
+$("publish-story").onclick = async () => {
+  if (!state.selectedStoryFile) return $("story-status").textContent = "Сначала выберите фото или видео.";
+  $("publish-story").disabled = true;
+  $("choose-story").disabled = true;
+  $("story-status").textContent = "Загрузка story…";
+  const form = new FormData(); form.append("file", state.selectedStoryFile); form.append("caption", $("story-caption").value); form.append("music_name", $("story-music").value);
+  try { await api("/me/stories/upload", {method:"POST", body:form, headers:{}}); if (state.storyPreviewUrl) URL.revokeObjectURL(state.storyPreviewUrl); state.storyPreviewUrl = null; state.selectedStoryFile = null; $("story-file").value = ""; $("story-preview").classList.add("hidden"); $("story-status").textContent = "Story успешно опубликована на 24 часа."; $("story-caption").value = ""; $("story-music").value = ""; loadStories(); showFeature("Story успешно опубликована."); } catch (error) { $("publish-story").disabled = false; $("story-status").textContent = `Не удалось опубликовать: ${error.message}`; showFeature(error.message); }
+  $("choose-story").disabled = false;
 };
 $("close-public-profile").onclick = () => $("public-profile-modal").classList.add("hidden");
+$("cancel-reply").onclick = () => { state.replyTo = null; $("reply-bar").classList.add("hidden"); };
+$("emoji-picker").querySelectorAll("[data-emoji]").forEach(button => button.onclick = () => { reactToMessage(state.reactionMessageId, button.dataset.emoji); $("emoji-picker").classList.add("hidden"); });
+$("close-story-viewer").onclick = () => { $("story-viewer").classList.add("hidden"); $("story-viewer-media").innerHTML = ""; };
+$("story-like").onclick = () => reactToStory(state.activeStory);
 $("public-profile-modal").onclick = (event) => {
   if (event.target === $("public-profile-modal")) $("public-profile-modal").classList.add("hidden");
 };
@@ -346,6 +675,9 @@ $("ai-btn").onclick = $("ai-card-btn").onclick = async () => {
     showFeature(result.answer);
   } catch (error) { showFeature(error.message); }
 };
-$("media-btn").onclick = $("media-card-btn").onclick = () => showFeature("Circle FX: здесь появится студия видеосообщений — музыка, фильтры и эффекты.");
+$("media-btn").onclick = () => showFeature("Медиа-инструменты скоро появятся.");
+$("chat-avatar").onclick = () => { if (state.active) openPublicProfile(state.active); };
+$("chat-heading").onclick = () => { if (state.active) openPublicProfile(state.active); };
+document.querySelector(".header-actions").onclick = event => event.stopPropagation();
 document.querySelectorAll(".call-btn").forEach(button => button.onclick = () => openCall(button.dataset.kind));
 $("end-call").onclick = () => closeCall();
