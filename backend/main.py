@@ -42,6 +42,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 AUTH_SECRET = os.getenv("SECRET_KEY")
 if not AUTH_SECRET:
     raise RuntimeError("SECRET_KEY must be configured")
+SESSION_TTL = datetime.timedelta(days=30)
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 MAX_STORY_BYTES = 50 * 1024 * 1024
 LOGIN_ATTEMPTS = defaultdict(deque)
@@ -134,7 +135,7 @@ def get_authenticated_user(
     except (ValueError, TypeError, UnicodeDecodeError, base64.binascii.Error) as error:
         raise HTTPException(status_code=401, detail="Недействительный токен") from error
     session = db.query(LoginSession).filter(LoginSession.id == session_id, LoginSession.revoked.is_(False)).first()
-    if not session or session.created_at < datetime.datetime.utcnow() - datetime.timedelta(hours=24):
+    if not session or session.created_at < datetime.datetime.utcnow() - SESSION_TTL:
         raise HTTPException(status_code=401, detail="Сессия истекла, войдите снова")
     session.last_seen_at = datetime.datetime.utcnow()
     db.commit()
@@ -246,10 +247,14 @@ def login_user(user_data: UserLogin, request: Request, db: Session = Depends(get
         db.commit()
     if user_data.public_key:
         user.public_key = user_data.public_key
-    db.query(LoginSession).filter(LoginSession.user_id == user.id, LoginSession.created_at < datetime.datetime.utcnow() - datetime.timedelta(hours=24)).update({"revoked": True})
+    db.query(LoginSession).filter(LoginSession.user_id == user.id, LoginSession.created_at < datetime.datetime.utcnow() - SESSION_TTL).update({"revoked": True})
     session = LoginSession(id=secrets.token_hex(24), user_id=user.id, device_name="Web browser")
     db.add(session); db.commit()
     return {"status": "success", "token": create_token(user.username, session.id), "user": UserResponse.model_validate(user)}
+
+@app.get("/me", response_model=UserResponse)
+def get_current_user(current_user: User = Depends(get_authenticated_user)):
+    return current_user
 
 @app.get("/get_key/{username}", response_model=PublicUserResponse)
 def get_public_key(username: str, db: Session = Depends(get_db), viewer: User = Depends(get_authenticated_user)):
@@ -513,8 +518,8 @@ async def send_media_message(
 ):
     if current_user.username != username:
         raise HTTPException(status_code=403, detail="Нельзя отправлять сообщения от чужого имени")
-    if media_type not in {"audio", "video"}:
-        raise HTTPException(status_code=422, detail="Поддерживаются только аудио и видео")
+    if media_type not in {"audio", "video", "image", "file"}:
+        raise HTTPException(status_code=422, detail="Поддерживаются аудио, видео, изображения и файлы")
     if not to_user:
         raise HTTPException(status_code=400, detail="Не указан получатель")
     recipient = db.query(User).filter(User.username == to_user).first()
@@ -522,15 +527,32 @@ async def send_media_message(
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     if users_are_blocked(db, current_user, recipient):
         raise HTTPException(status_code=403, detail="Нельзя отправить сообщение: пользователь заблокирован")
-    allowed = {"audio": ["audio/webm", "audio/mpeg", "audio/mp4", "audio/ogg"], "video": ["video/webm", "video/mp4"]}
+    allowed = {
+        "audio": ["audio/webm", "audio/mpeg", "audio/mp4", "audio/ogg"],
+        "video": ["video/webm", "video/mp4", "video/quicktime"],
+        "image": ["image/jpeg", "image/png", "image/webp", "image/gif"],
+        "file": ["application/pdf", "text/plain", "application/zip", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    }
     content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
     if content_type not in allowed[media_type]:
         raise HTTPException(status_code=415, detail="Неподдерживаемый тип медиа")
-    suffix = ".webm" if media_type == "audio" else ".webm"
+    suffix = Path(file.filename or "").suffix.lower() if media_type == "file" else (".webm" if media_type in {"audio", "video"} else ".jpg")
+    if media_type == "file" and not suffix:
+        suffix = ".bin"
     if content_type in {"audio/mpeg", "audio/mp4"}:
         suffix = ".mp3" if media_type == "audio" else ".mp4"
     elif content_type == "audio/ogg":
         suffix = ".ogg"
+    elif content_type == "video/mp4":
+        suffix = ".mp4"
+    elif content_type == "video/quicktime":
+        suffix = ".mov"
+    elif content_type == "image/png":
+        suffix = ".png"
+    elif content_type == "image/webp":
+        suffix = ".webp"
+    elif content_type == "image/gif":
+        suffix = ".gif"
     filename = f"msg_{current_user.id}_{recipient.id}_{uuid.uuid4().hex}{suffix}"
     file_bytes = await read_limited_upload(file, 16 * 1024 * 1024)
     (UPLOAD_DIR / filename).write_bytes(file_bytes)
@@ -682,9 +704,9 @@ async def websocket_endpoint(websocket: WebSocket, username: str, db: Session = 
         valid = (
             token_username == username
             and hmac.compare_digest(signature, expected)
-            and int(issued_at) >= int(time.time()) - 60 * 60 * 24
+            and int(issued_at) >= int(time.time()) - int(SESSION_TTL.total_seconds())
             and session is not None
-            and session.created_at >= datetime.datetime.utcnow() - datetime.timedelta(hours=24)
+            and session.created_at >= datetime.datetime.utcnow() - SESSION_TTL
             and session.user_id == db.query(User.id).filter(User.username == username).scalar()
         )
     except (ValueError, TypeError, UnicodeDecodeError, base64.binascii.Error, OverflowError):

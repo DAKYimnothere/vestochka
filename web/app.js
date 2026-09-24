@@ -1,4 +1,4 @@
-const state = { user: null, active: null, chats: new Map(), token: null, socket: null, peer: null, stream: null, avatarImage: null, avatarRotation: 0, presence: new Map(), typingTimer: null, privateKey: null, pendingIce: [], selectedStoryFile: null, storyPreviewUrl: null, callTimeout: null, mediaRecorder: null, mediaChunks: [], mediaMode: null, mediaTimer: null, isRecording: false };
+const state = { user: null, active: null, chats: new Map(), token: null, socket: null, peer: null, stream: null, avatarImage: null, avatarRotation: 0, presence: new Map(), typingTimer: null, privateKey: null, pendingIce: [], selectedStoryFile: null, storyPreviewUrl: null, callTimeout: null, mediaRecorder: null, mediaChunks: [], mediaMode: null, mediaTimer: null, isRecording: false, isPaused: false };
 const $ = (id) => document.getElementById(id);
 const initials = (name) => (name || "?").slice(0, 1).toUpperCase();
 const setStatus = (text, error = true) => { $("auth-status").textContent = text; $("auth-status").style.color = error ? "#d46e7b" : "#5b9b7d"; };
@@ -15,6 +15,32 @@ async function api(url, options = {}) {
     throw new Error(detail);
   }
   return body;
+}
+const SESSION_STORAGE_KEY = "vestochka-session";
+function saveSession(username, token) {
+  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({username, token}));
+}
+function clearSession() {
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+  state.token = null;
+  state.privateKey = null;
+}
+async function restoreSession() {
+  const stored = localStorage.getItem(SESSION_STORAGE_KEY);
+  if (!stored) return;
+  let session;
+  try {
+    session = JSON.parse(stored);
+    if (!session?.username || !session?.token) throw new Error("Некорректная сохранённая сессия");
+    state.token = session.token;
+    state.privateKey = await loadBrowserPrivateKey(session.username);
+    if (!state.privateKey) throw new Error("На этом устройстве отсутствует ключ шифрования");
+    const user = await api("/me");
+    showMessenger(user);
+  } catch (error) {
+    clearSession();
+    $("auth-status").textContent = "Сессия завершена. Войдите снова, чтобы продолжить.";
+  }
 }
 const bytesToBase64 = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes)));
 const base64ToBytes = value => Uint8Array.from(atob(value), char => char.charCodeAt(0));
@@ -321,6 +347,7 @@ async function authenticate(register = false) {
     const result = await api(register ? "/register" : "/login", {method: "POST", body: JSON.stringify({username, password, public_key: publicKey})});
     state.token = result.token;
     state.privateKey = keyData.privateKey;
+    saveSession(username, result.token);
     showMessenger(result.user);
   } catch (error) {
     setStatus(error.message === "Taken" ? "Этот username уже занят. Войдите или выберите другой." : error.message);
@@ -423,7 +450,7 @@ async function renderMessages(messages) {
     const replyMessage = message.reply_to_id ? messages.find(item => item.id === message.reply_to_id) : null;
     const replyIndex = replyMessage ? messages.indexOf(replyMessage) : -1;
     const reply = replyMessage ? `<small class="reply-reference">${escapeHtml((decrypted[replyIndex] || (message.media_type === 'audio' ? 'Голосовое сообщение' : message.media_type === 'video' ? 'Кружочек' : 'Сообщение')).slice(0, 120))}</small>` : "";
-    const mediaMarkup = message.media_url ? (message.media_type === 'audio' ? `<div class="audio-player"><audio class="audio-source" preload="metadata" src="${message.media_url}"></audio><button class="audio-play" type="button" aria-label="Воспроизвести голосовое сообщение"><span>▶</span></button><div class="audio-details"><input class="audio-progress" type="range" min="0" max="100" value="0" step="0.1" aria-label="Позиция голосового сообщения"><div class="audio-meta"><span class="audio-label">Голосовое</span><span class="audio-time">0:00</span></div></div></div>` : `<video controls playsinline class="media-message video-circle" src="${message.media_url}"></video>`) : "";
+    const mediaMarkup = message.media_url ? (message.media_type === 'audio' ? `<div class="audio-player"><audio class="audio-source" preload="metadata" src="${message.media_url}"></audio><button class="audio-play" type="button" aria-label="Воспроизвести голосовое сообщение"><span>▶</span></button><div class="audio-details"><input class="audio-progress" type="range" min="0" max="100" value="0" step="0.1" aria-label="Позиция голосового сообщения"><div class="audio-meta"><span class="audio-label">Голосовое</span><span class="audio-time">0:00</span></div></div></div>` : message.media_type === 'image' ? `<img loading="lazy" class="media-message image-message" src="${message.media_url}" alt="Изображение">` : message.media_type === 'file' ? `<a class="file-message" href="${message.media_url}" target="_blank" rel="noopener">↧ <span>Открыть файл</span></a>` : `<video controls playsinline class="media-message video-circle" src="${message.media_url}"></video>`) : "";
     const textMarkup = message.media_url ? "" : `<div class="message-text">${escapeHtml(decrypted[index])}</div>`;
     return `<div class="message ${mine ? "mine" : ""}" data-message-id="${message.id || ""}">${reply}${mediaMarkup || textMarkup}<div class="message-tools"><button class="message-action reply-action" title="Ответить">↩</button><button class="message-action reaction-action" title="Реакция">😊</button>${reactions}</div><time>${new Date(message.timestamp).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})} ${ticks}</time></div>`;
   }).join("") : `<div class="empty-state"><span>✦</span><h2>Первое сообщение</h2><p>Добавь немного тепла в этот чат.</p></div>`;
@@ -506,12 +533,18 @@ async function sendMediaMessage(mediaType) {
     state.mediaRecorder = recorder;
     state.mediaChunks = [];
     state.mediaMode = mediaType;
+    state.isPaused = false;
     if (mediaType === "video") {
       const preview = $("recording-preview");
       preview.srcObject = stream;
       $("recording-title").textContent = "Запись кружочка";
       $("recording-overlay").classList.remove("hidden");
+    } else {
+      $("recording-title").textContent = "Запись голосового";
+      $("recording-preview").srcObject = null;
+      $("recording-overlay").classList.remove("hidden");
     }
+    $("recording-overlay").classList.toggle("recording-audio", mediaType === "audio");
     recorder.ondataavailable = (event) => { if (event.data.size) state.mediaChunks.push(event.data); };
     recorder.onstop = async () => {
       const blob = new Blob(state.mediaChunks, {type: recorder.mimeType || mimeType || (mediaType === "video" ? "video/webm" : "audio/webm")});
@@ -535,9 +568,11 @@ async function sendMediaMessage(mediaType) {
       $("recording-preview").srcObject = null;
       $("recording-overlay").classList.add("hidden");
       state.isRecording = false;
+      state.isPaused = false;
       state.discardMedia = false;
       $(mediaType === 'video' ? 'video-record-btn' : 'voice-record-btn').classList.remove('recording');
       $("recording-status").textContent = "";
+      $("pause-recording").textContent = "Пауза";
       clearInterval(state.mediaTimer);
       state.replyTo = null;
       $("reply-bar").classList.add("hidden");
@@ -581,6 +616,39 @@ function stopMediaRecording(discard = false) {
     $(state.mediaMode === 'video' ? 'video-record-btn' : 'voice-record-btn').classList.remove('recording');
   }
 }
+function toggleMediaPause() {
+  const recorder = state.mediaRecorder;
+  if (!recorder || !state.isRecording) return;
+  if (recorder.state === "recording") {
+    recorder.pause();
+    state.isPaused = true;
+    $("pause-recording").textContent = "Продолжить";
+    $("recording-overlay").classList.add("recording-paused");
+    showFeature("Запись приостановлена.");
+  } else if (recorder.state === "paused") {
+    recorder.resume();
+    state.isPaused = false;
+    $("pause-recording").textContent = "Пауза";
+    $("recording-overlay").classList.remove("recording-paused");
+    showFeature("Запись продолжается.");
+  }
+}
+async function uploadChatFile(file) {
+  if (!file || !state.active) return;
+  const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : file.type.startsWith("audio/") ? "audio" : "file";
+  if (file.size > 16 * 1024 * 1024) return showFeature("Файл слишком большой. Максимум — 16 МБ.");
+  const form = new FormData();
+  form.append("file", file);
+  form.append("to_user", state.active);
+  form.append("media_type", kind);
+  try {
+    const result = await api(`/messages/${state.user.username}/media?to_user=${encodeURIComponent(state.active)}&media_type=${kind}`, {method:"POST", body:form});
+    const messages = state.chats.get(state.active) || [];
+    messages.push({id: result.id, sender: state.user.username, encrypted_text: "", timestamp: result.timestamp, reply_to_id: result.reply_to_id, reactions: {}, media_url: result.media_url, media_type: result.media_type});
+    state.chats.set(state.active, messages);
+    renderMessages(messages); loadRecentChats(); showFeature("Файл отправлен.");
+  } catch (error) { showFeature(error.message); }
+}
 function showFeature(text) {
   $("feature-note").textContent = text;
   const toast = $("action-toast");
@@ -597,7 +665,7 @@ $("message-input").oninput = () => {
   clearTimeout(state.typingTimer);
   state.typingTimer = setTimeout(() => sendPresence("typing", false), 1200);
 };
-$("logout-btn").onclick = () => location.reload();
+$("logout-btn").onclick = () => { clearSession(); location.reload(); };
 $("voice-record-btn").onclick = () => {
   if (state.isRecording) {
     stopMediaRecording();
@@ -615,6 +683,9 @@ $("video-record-btn").onclick = () => {
 $("mobile-back-btn").onclick = closeMobileChat;
 $("stop-recording").onclick = () => stopMediaRecording(false);
 $("cancel-recording").onclick = () => stopMediaRecording(true);
+$("pause-recording").onclick = toggleMediaPause;
+$("media-btn").onclick = () => $("chat-file").click();
+$("chat-file").onchange = (event) => { uploadChatFile(event.target.files[0]); event.target.value = ""; };
 
 document.querySelectorAll("[data-tab]").forEach(button => button.onclick = () => switchTab(button.dataset.tab));
 $("save-profile").onclick = async () => {
@@ -705,9 +776,9 @@ $("ai-btn").onclick = $("ai-card-btn").onclick = async () => {
     showFeature(result.answer);
   } catch (error) { showFeature(error.message); }
 };
-$("media-btn").onclick = () => showFeature("Медиа-инструменты скоро появятся.");
 $("chat-avatar").onclick = () => { if (state.active) openPublicProfile(state.active); };
 $("chat-heading").onclick = () => { if (state.active) openPublicProfile(state.active); };
 document.querySelector(".header-actions").onclick = event => event.stopPropagation();
 document.querySelectorAll(".call-btn").forEach(button => button.onclick = () => openCall(button.dataset.kind));
 $("end-call").onclick = () => closeCall();
+restoreSession();

@@ -17,6 +17,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     if all((DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME)):
         DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    elif os.getenv("ENVIRONMENT", "development").lower() == "production" or os.getenv("RENDER"):
+        raise RuntimeError("DATABASE_URL must be configured in production")
     else:
         DATABASE_URL = "sqlite:///./vestochka.db"
 
@@ -26,7 +28,11 @@ if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
 # Создаем движок базы данных
-engine_options = {"connect_args": {"check_same_thread": False}} if DATABASE_URL.startswith("sqlite") else {}
+engine_options = (
+    {"connect_args": {"check_same_thread": False}}
+    if DATABASE_URL.startswith("sqlite")
+    else {"pool_pre_ping": True, "pool_recycle": 1800}
+)
 engine = create_engine(DATABASE_URL, **engine_options)
 
 # Сессия для выполнения запросов

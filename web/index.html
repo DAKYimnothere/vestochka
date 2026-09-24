@@ -132,14 +132,17 @@
         <div id="action-toast" class="action-toast" role="status"></div>
         <div class="composer">
           <button id="ai-btn" class="tool-btn" title="Спросить AI">AI</button>
-          <button id="media-btn" class="tool-btn" title="Музыка и эффекты">♫</button>
+          <button id="media-btn" class="tool-btn attach-btn" title="Прикрепить файл" aria-label="Прикрепить файл">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16.5 6.5-7.8 7.8a3 3 0 0 0 4.2 4.2l7-7a5 5 0 0 0-7.1-7.1l-7.4 7.4a7 7 0 1 0 9.9 9.9l6.2-6.2"/></svg>
+          </button>
+          <input id="chat-file" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt" hidden>
           <button id="voice-record-btn" class="voice-record-btn" title="Голосовое сообщение" aria-label="Записать голосовое сообщение">
             <span class="pulse-ring"></span>
-            <span class="voice-icon">◉</span>
+            <svg class="voice-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></svg>
           </button>
           <button id="video-record-btn" class="video-record-btn" title="Кружочек" aria-label="Записать кружочек">
             <span class="pulse-ring"></span>
-            <span class="video-icon">●</span>
+            <svg class="video-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none"/></svg>
           </button>
           <span id="recording-status" class="recording-status" aria-live="polite"></span>
           <input id="message-input" placeholder="Напишите сообщение..." disabled>
@@ -195,7 +198,7 @@
       <h2 id="recording-title">Запись кружочка</h2>
       <div class="recording-preview-frame"><video id="recording-preview" autoplay muted playsinline></video><div class="recording-preview-ring"></div></div>
       <p id="recording-overlay-status" class="muted">00:00</p>
-      <div class="recording-actions"><button id="cancel-recording" class="ghost">Отмена</button><button id="stop-recording" class="primary">Готово</button></div>
+      <div class="recording-actions"><button id="cancel-recording" class="ghost">Удалить</button><button id="pause-recording" class="recording-pause">Пауза</button><button id="stop-recording" class="primary">Отправить</button></div>
     </div>
   </div>
   <div id="avatar-editor" class="call-overlay hidden">
