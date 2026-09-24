@@ -358,9 +358,9 @@ async function authenticate(register = false) {
 function renderSearch(users) {
   $("search-results").innerHTML = users.map(user => `<div class="result" data-username="${user.username}"><div class="avatar result-avatar" style="${user.avatar_url ? `background-image:url('${user.avatar_url}')` : ""}">${user.avatar_url ? "" : initials(user.username)}</div><div class="result-info"><strong>${escapeHtml(user.display_name || "Пользователь")}</strong><small>@${user.username} · ID ${user.id}</small></div><button class="result-action profile-action" title="Открыть профиль">◉</button><button class="result-action chat-action" title="Написать">➤</button></div>`).join("");
   document.querySelectorAll(".result").forEach(el => {
+    el.onclick = () => openChat(el.dataset.username);
     el.querySelector(".profile-action").onclick = (event) => { event.stopPropagation(); openPublicProfile(el.dataset.username); };
     el.querySelector(".chat-action").onclick = (event) => { event.stopPropagation(); openChat(el.dataset.username); };
-    el.querySelector(".result-info").onclick = () => openChat(el.dataset.username);
   });
 }
 function renderRecentChats(chats) {
@@ -497,6 +497,7 @@ function chooseReaction(messageId) { state.reactionMessageId = Number(messageId)
 async function reactToMessage(messageId, emoji) { try { const result = await api(`/messages/${state.user.username}/${messageId}/reaction`, {method:"POST", body:JSON.stringify({emoji})}); const messages = state.chats.get(state.active) || []; const message = messages.find(item => item.id === messageId); if (message) message.reactions = result.reactions; renderMessages(messages); } catch (error) { showFeature(error.message); } }
 function escapeHtml(value) { return value.replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[char])); }
 async function openChat(username) {
+  switchTab("chat");
   state.active = username; $("chat-name").textContent = `@${username}`; $("chat-status").textContent = "В сети · защищённый разговор";
   $("messenger-view").classList.remove("mobile-panel-profile", "mobile-panel-settings");
   $("messenger-view").classList.add("mobile-chat-open");

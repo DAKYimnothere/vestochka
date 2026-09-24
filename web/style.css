@@ -331,6 +331,26 @@ body.dark .empty-state span{color:#1e2312}
   .chat-list::-webkit-scrollbar{display:none}
   .chat-item{min-height:66px;padding:10px 8px;border-radius:14px}
   .chat-item .avatar{width:44px;height:44px;border-radius:14px}
+  .result{
+    min-height:64px;
+    padding:10px 8px;
+    border-radius:14px;
+    touch-action:manipulation;
+  }
+  .result-info{min-width:0;flex:1}
+  .result-info strong,.result-info small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .result-action{
+    display:grid;
+    place-items:center;
+    width:40px;
+    height:40px;
+    flex:0 0 40px;
+    border-radius:12px;
+    font-size:17px;
+    touch-action:manipulation;
+  }
+  .result-action.chat-action{background:var(--accent);color:var(--ink)}
+  .search-results:empty{display:none}
   .feature-panel{display:none}
   .conversation{
     position:absolute;
