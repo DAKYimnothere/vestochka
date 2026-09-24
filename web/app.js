@@ -144,6 +144,8 @@ function switchTab(tab) {
   document.querySelectorAll(".tab-content").forEach(item => item.classList.add("hidden"));
   $(`${tab}-tab`).classList.remove("hidden");
   document.querySelectorAll(".nav-tab").forEach(item => item.classList.toggle("active", item.dataset.tab === tab));
+  $("messenger-view").classList.remove("mobile-chat-open", "mobile-panel-profile", "mobile-panel-settings");
+  if (tab === "profile" || tab === "settings") $("messenger-view").classList.add(`mobile-panel-${tab}`);
   if (tab === "settings") loadSessions();
 }
 async function loadSessions() {
@@ -496,6 +498,7 @@ async function reactToMessage(messageId, emoji) { try { const result = await api
 function escapeHtml(value) { return value.replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[char])); }
 async function openChat(username) {
   state.active = username; $("chat-name").textContent = `@${username}`; $("chat-status").textContent = "В сети · защищённый разговор";
+  $("messenger-view").classList.remove("mobile-panel-profile", "mobile-panel-settings");
   $("messenger-view").classList.add("mobile-chat-open");
   $("chat-avatar").textContent = initials(username); $("message-input").disabled = false; $("send-btn").disabled = false;
   document.querySelector(".conversation").classList.add("chat-ready");
@@ -505,7 +508,10 @@ async function openChat(username) {
   try { const messages = await api(`/history/${state.user.username}/${username}`); state.chats.set(username, messages); renderMessages(messages); markChatRead(username); } catch (error) { $("feature-note").textContent = error.message; }
   $("feature-note").textContent = "Можно начать с сообщения, AI-подсказки или звонка.";
 }
-function closeMobileChat() { $("messenger-view").classList.remove("mobile-chat-open"); }
+function closeMobileChat() {
+  $("messenger-view").classList.remove("mobile-chat-open", "mobile-panel-profile", "mobile-panel-settings");
+  switchTab("chat");
+}
 async function markChatRead(username) {
   try { await api(`/chats/${username}/read`, {method:"POST"}); loadRecentChats(); }
   catch (error) { showFeature("Не удалось обновить статус прочтения: " + error.message); }
